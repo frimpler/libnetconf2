@@ -518,7 +518,7 @@ NC_MSG_TYPE nc_handshake_io(struct nc_session *session);
  * @param[in] port Port to connect on.
  * @return Connected socket or -1 on error.
  */
-int nc_sock_connect(const char *host, uint16_t port);
+int nc_sock_connect(const char *host, uint16_t port, int timeout);
 
 /**
  * @brief Accept a new socket connection.

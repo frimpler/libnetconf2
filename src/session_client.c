@@ -899,17 +899,23 @@ fail:
 }
 
 int
-nc_sock_connect(const char* host, uint16_t port)
+nc_sock_connect(const char* host, uint16_t port, int timeout)
 {
-    int i, sock = -1, flags;
+    int i, sock = -1, flags, ret=0;
+    fd_set  wset;
     struct addrinfo hints, *res_list, *res;
     char port_s[6]; /* length of string representation of short int */
+    struct timeval  ts;
+
+    ts.tv_sec = timeout;
+    ts.tv_usec = 0;
 
     snprintf(port_s, 6, "%u", port);
+    VRB("nc_sock_connect(%s, %u, %d)", host, port, timeout);
 
     /* Connect to a server */
     memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_UNSPEC;
+    hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
     i = getaddrinfo(host, port_s, &hints, &res_list);
@@ -922,13 +928,6 @@ nc_sock_connect(const char* host, uint16_t port)
         sock = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
         if (sock == -1) {
             /* socket was not created, try another resource */
-            continue;
-        }
-
-        if (connect(sock, res->ai_addr, res->ai_addrlen) == -1) {
-            /* network connection failed, try another resource */
-            close(sock);
-            sock = -1;
             continue;
         }
 
@@ -949,6 +948,39 @@ nc_sock_connect(const char* host, uint16_t port)
             return -1;
         }
 
+        if (connect(sock, res->ai_addr, res->ai_addrlen) < 0) {
+            if (errno != EINPROGRESS) {
+                /* network connection failed, try another resource */
+                VRB("connect failed: (%s).", strerror(errno));
+                close(sock);
+                sock = -1;
+                continue;
+            }
+        }
+
+        FD_ZERO(&wset);
+        FD_SET(sock, &wset);
+
+        if ((ret = select(sock + 1, NULL, &wset, NULL, (timeout != -1) ? &ts : NULL)) < 0) {
+            ERR("select failed: (%s).", strerror(errno));
+            close(sock);
+            freeaddrinfo(res_list);
+            return -1;
+        }
+
+        if (ret == 0) {   //we had a timeout
+            VRB("timed out after %ds (%s).", timeout, strerror(errno));
+            close(sock);
+            freeaddrinfo(res_list);
+            return -1;
+        }
+
+        if (!FD_ISSET(sock, &wset)) {
+            ERR("FD_ISSET failed: (%s).", strerror(errno));
+            close(sock);
+            freeaddrinfo(res_list);
+            return -1;
+        }
         /* we're done, network connection established */
         break;
     }
